@@ -1,0 +1,32 @@
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Go
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+*.prof
+
+# Build artifacts
+/web/css/app.css
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Env
+.env
+.env.local
+
+# DB
+*.sqlite
+*.sqlite-journal
+*.db
+
+# Node (CSS tooling only)
+node_modules/
+package-lock.json
