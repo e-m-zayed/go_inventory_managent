@@ -279,7 +279,7 @@
 - [ ] Task 07.2: Checkout/Return handlers (StockMovement + Asset status)
 - [ ] Task 07.3: License + LicenseSeat + checkout/return seat
 - [ ] Task 07.4: Depreciation schema + schedule generation
-- [ ] Task 07.5: Asset QR (stdlib SVG) + label print view
+- [ ] Task 07.5: Asset QR (gozxing PNG) + label print view
 - [ ] Task 07.6: Phase 07 gate
 
 ---
