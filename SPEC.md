@@ -103,7 +103,7 @@ go_inventory_managent/
   - Persist user locale preference in the `users.locale` column; never in a client-side cookie alone.
   - Set `dir` and `lang` on the `<html>` element from the request locale for every page render.
   - Use logical CSS properties in every template (enforces mirroring).
-  - One commit per task; reference the task in the commit body.
+  - One logical change per commit; one task per commit when tasks are atomic. Commit message subject and body follow the Mitchellh style defined in `AGENTS.md` — no conventional-commit prefixes, no file-by-file enumeration, no task-ID trailers. Re-read the staged diff before committing and ask whether the subject alone is enough; if not, the body explains *why*, not *what files*.
   - Search the codebase before assuming something isn't implemented.
   - Embed `TenantMixin` in every domain ent schema (everything except `Tenant`, `User`-tenant-edge, `Permission` codes). Never write a domain entity without it.
   - Register the fail-closed tenant interceptor on the ent client at startup; every query/mutation passes through it.
