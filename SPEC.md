@@ -133,8 +133,16 @@ go_inventory_managent/
 ## Open Questions
 
 1. **Session secret source:** default to a random 32-byte value generated at startup (logged once) when `INVENTORY_SESSION_SECRET` env is unset. Acceptable, or require explicit env on first run?
+  -> require explicit env.
 2. **File uploads (attachments):** store on local filesystem under `uploads/` (gitignored) keyed by ent attachment row. Acceptable for v0.1.0, or defer attachments entirely until an object store is chosen?
+  -> store on local filesystem.
 3. **Barcode scanning UI:** P8 ships QR *generation*. Scanning (camera input) is browser-side via the device's native `getUserMedia` + a stdlib-free JS decoder, or out of scope for v0.1.0? (Recommend: out of scope; users scan with any app and hit the `/scan/{code}` landing route.)
+  -> the feature is required but your suggested implementation needs better research before settling the execution -> will affect the plan.
+  
 4. **Multi-tenant:** single-tenant for v0.1.0 (one installation = one warehouse org). Multi-tenant (org column + row-level filtering) deferred. Confirm.
-5. **Currency:** single-currency per installation for v0.1.0 (config-driven), multi-currency + exchange rates deferred. Confirm.
+  -> multi-tenant.
+5. **Currency:** single-currency per installation for v0.1.0 (config-driven), multi-currency + exchange rates deferred. Confirm. 
+  -> we will later add frankfurter v2 fx rates and go money package but this is out of scope at the current stage.
+
 6. **Reports rendering:** server-rendered HTML tables only (no chart library). Charts deferred. Confirm.
+  -> yes, deferred
