@@ -20,7 +20,7 @@ Success looks like: a single binary runs locally, opens in a browser, lets a use
 - **Templating:** stdlib `html/template`
 - **DB (dev):** SQLite via Ent's SQLite dialect
 - **DB (prod, final phase):** Postgres via Ent's Postgres dialect — dialect swap is the last phase
-- **QR/barcode generation + scanning:** `github.com/makiuchi-d/gozxing` (pure-Go ZXing port — handles both encoding and decoding across QR, Code128, Code39/93, EAN-8/13, Codabar, ITF, DataMatrix, Aztec). No vendored JS, no stdlib SVG hand-roll.
+- **QR codes:** stdlib-only SVG generator (no external QR library)
 - **Auth:** stdlib signed-cookie sessions + stdlib PBKDF2 password hashing
 
 No external libraries beyond the ones listed above and their transitive dependencies.
@@ -66,11 +66,12 @@ go_inventory_managent/
 │   ├── i18n/                 # bundle loader, locale registry, embedded active.*.toml
 │   ├── db/                   # ent client open + seed helpers (seeds root tenant + admin)
 │   ├── config/               # env-driven config (INVENTORY_SESSION_SECRET required, INVENTORY_DB, INVENTORY_ADDR, INVENTORY_DEFAULT_LOCALE, INVENTORY_CURRENCY)
-│   └── barcode/              # gozxing-based generation + decoding helpers (P8)
+│   └── qrcode/               # stdlib QR SVG generator (P8)
 ├── web/
 │   ├── css/input.css         # tailwind + daisyui plugin source
 │   └── vendor/
-│       └── htmx.min.js       # vendored
+│       ├── htmx.min.js       # vendored
+│       └── jsQR.min.js       # vendored (P8 barcode-scan fallback)
 └── docs/                     # reference notes only
 ```
 
@@ -135,7 +136,7 @@ go_inventory_managent/
 - The app refuses to start when `INVENTORY_SESSION_SECRET` is unset.
 - Every domain entity is tenant-scoped: a query in tenant A's request context returns zero rows from tenant B. Verified by a service test that opens two tenants and asserts cross-tenant read/mutation attempts return no rows / are rejected.
 - Every domain phase (catalog, stock, procurement, outbound, manufacturing, assets, operations, reports) has end-to-end CRUD or workflow working in the browser with English + Arabic strings.
-- Barcode + QR generation and scanning works: opening the scan page grants camera access, captures a frame, uploads it via htmx, the server decodes it with gozxing, and the browser follows an HX-Redirect to the matching entity's detail page. Label views render QR PNGs generated server-side via gozxing.
+- Barcode scanning works in the browser: opening the scan page grants camera access, decodes a QR via `BarcodeDetector` when available or vendored `jsQR` as fallback, and POSTs the code to `/{lang}/scan/{code}` which redirects to the matching entity's detail page.
 - A seeded admin user (`admin@example.com` / `admin`) belonging to the root tenant can log in and exercise every feature.
 - All user-facing strings exist in both `active.en.toml` and `active.ar.toml`.
 - Final phase: app runs against Postgres with versioned migrations; `mage migrate` succeeds; all tests green.
@@ -152,9 +153,10 @@ go_inventory_managent/
    - No cross-tenant queries in normal request flows. Reports and exports inherit the tenant filter automatically.
 4. **Currency:** single currency per installation for v0.1.0, driven by an env/config value. Multi-currency + FX rates (Frankfurter v2) + `go-money` are out of scope for v0.1.0 and will land in a later minor release.
 5. **Reports rendering:** server-rendered HTML tables only. No chart library. Charts deferred.
-6. **Barcode + QR generation and scanning:** in scope for v0.1.0 (Phase 08). Handled by a single Go package, `github.com/makiuchi-d/gozxing`, on the server.
-   - **Generation:** the server renders QR (and other 1D/2D formats as needed) to a `*image.RGBA` via gozxing's writers, encodes to PNG with stdlib `image/png`, and streams it back for product/stock/location/asset/bin label views.
-   - **Scanning:** the browser captures a single frame from `getUserMedia`, uploads it via htmx (`hx-post` with the image bytes), the server decodes it with gozxing's `qrcode.NewQRCodeReader().Decode(...)` (or `MultiFormatReader` for mixed formats), resolves the resulting code string against the entity lookup, and returns an HX-Redirect to the entity's detail page. No browser-side decoder, no feature detection, no vendored JS. Works in every browser that supports `getUserMedia` + file upload.
+6. **Barcode scanning UI:** in scope for v0.1.0 (Phase 08). Browser-side, no Go server changes beyond the already-planned `/{lang}/scan/{code}` landing route.
+   - Mechanism: feature-detect the native `BarcodeDetector` API (zero deps, but limited/experimental browser support, HTTPS-only). When unavailable, fall back to a vendored copy of `jsQR` (~50 KB pure JS, works in every modern browser).
+   - Camera access via `getUserMedia`; decoded string POSTed to the existing scan landing route, which resolves the entity (product / stock item / location / asset / bin) by encoded ID and redirects to its detail page.
+   - Both paths feed a captured `ImageData` to the decoder; the result is a code string that the existing `/scan/{code}` handler already accepts. No new server-side decoder code.
 
 ## Open Questions
 
