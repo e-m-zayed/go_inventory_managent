@@ -291,12 +291,21 @@
 - [ ] Task 08.3: Cycle count entry + variance report
 - [ ] Task 08.4: StockTransfer bulk (multi-line bin→bin, facility→facility)
 - [ ] Task 08.5: RecallLot + quarantine handler
-- [ ] Task 08.6: QR generator (stdlib SVG) for products, stock, locations, assets, bins
-- [ ] Task 08.7: QR scan landing route `/{lang}/scan/{code}` → resolve entity by encoded ID + redirect to detail
-- [ ] Task 08.8: Vendor `jsQR` and add a browser-side scan page
-  - Acceptance: `web/vendor/jsQR.min.js` vendored (~50 KB, Apache-2.0); a `/{lang}/scan` page grants camera access via `getUserMedia`, feature-detects `BarcodeDetector` and uses it when available, else falls back to jsQR; on decode, POSTs the code string to `/{lang}/scan/{code}` (the route from 08.7) and follows the redirect. Works in HTTPS / localhost; graceful error when camera denied.
-  - Verify: `test -s web/vendor/jsQR.min.js`; manual: open `/en/scan` in a browser, scan a printed QR, land on the entity detail page; repeat in `/ar/scan` and confirm mirrored layout.
-  - Files: `web/vendor/jsQR.min.js`, `internal/server/templates/pages/scan.html`, `internal/server/operations.go` (handler for `GET /{lang}/scan`), `internal/server/static/` (embed), `internal/i18n/locales/active.{en,ar}.toml`
+- [ ] Task 08.6: gozxing generation helper + QR/barcode label endpoints
+  - Acceptance: `internal/barcode/generate.go` wraps gozxing writers (QR + Code128 + EAN-13 at minimum) and returns a PNG via stdlib `image/png`; `GET /{lang}/qr/{kind}/{id}.png` returns the PNG for products, stock items, locations, assets, bins; the encoded payload is a stable code string the scan route (08.7) can resolve back to the entity.
+  - Verify: `go test ./internal/barcode/...` for the generate helper (round-trip: encode a string, decode it, assert equal); `curl -s -o /tmp/x.png /en/qr/product/1.png` produces a valid PNG.
+  - Files: `internal/barcode/generate.go`, `internal/barcode/generate_test.go`, `internal/server/operations.go` (label endpoints), `go.mod`, `go.sum`
+
+- [ ] Task 08.7: Scan landing route + server-side decode via gozxing
+  - Acceptance: `GET /{lang}/scan/{code}` resolves the code string to an entity (product / stock item / location / asset / bin) and redirects to its detail page; `POST /{lang}/scan` accepts a multipart image upload, decodes it with gozxing's QR reader (or `MultiFormatReader` for mixed formats), and returns an HX-Redirect to the resolved detail page (or a 404 partial when no match). Permission-gated per entity kind.
+  - Verify: `go test ./internal/barcode/...` for the decode helper (encode then decode round-trip); manual: `curl -F image=@/tmp/x.png /en/scan` returns the HX-Redirect header.
+  - Files: `internal/barcode/decode.go`, `internal/barcode/decode_test.go`, `internal/server/operations.go` (scan routes), `internal/service/lookup.go` (code→entity resolution), `internal/i18n/locales/active.{en,ar}.toml`
+
+- [ ] Task 08.8: Browser scan page (getUserMedia + htmx upload)
+  - Acceptance: `GET /{lang}/scan` renders a page that requests camera access via `getUserMedia`, shows a live `<video>` preview, captures a frame to a `<canvas>` on a "Scan" button click, and `hx-post`s the canvas image (as a Blob) to `/{lang}/scan`; follows the HX-Redirect from the server to the entity detail page. Mirrored layout in `/ar/scan`. Graceful message when camera is denied or unavailable (e.g. non-HTTPS, no camera). No vendored JS — uses the browser's native MediaStreams + Canvas APIs.
+  - Verify: `test ! -e web/vendor/jsQR.min.js` (no vendored decoder); manual: open `/en/scan` over HTTPS or localhost, scan a printed QR from 08.6, land on the entity detail page; repeat in `/ar/scan` and confirm mirror.
+  - Files: `internal/server/templates/pages/scan.html`, `internal/server/operations.go` (handler for `GET /{lang}/scan`), `internal/i18n/locales/active.{en,ar}.toml`
+
 - [ ] Task 08.9: Phase 08 gate
 
 ---
