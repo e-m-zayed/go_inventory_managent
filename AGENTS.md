@@ -36,8 +36,47 @@
 
 # git discipline
 - every minor change should be tracked with git closely.
-- write commit messages in Mitchellh's style
-- 
+- one logical change per commit. if a change spans multiple files but is one decision, that is one commit. if two unrelated edits land together, split them.
+- commit messages follow Mitchell Hashimoto's style, verified against his actual commits in hashicorp/go-plugin and similar repos. the rules:
+
+  **subject line**
+  - lowercase or sentence-case, never all caps.
+  - imperative or declarative mood, present tense ("add SyncStdio", "interrupts should not be eaten in test mode", "Serve owns opts.Listener").
+  - no conventional-commit prefixes: no `feat:`, `fix:`, `docs:`, `chore:`, `refactor:`.
+  - no scope suffixes like `barcode:` or `todo:`. the subject describes the change, not the area.
+  - ≤72 characters, hard limit.
+  - short is good. "add SyncStdio", "Note on exit", "fix typo in server error" are real Mitchellh subjects. prefer 3-6 words when the change is small.
+  - no trailing period.
+
+  **body**
+  - optional. omit it entirely when the subject makes the change self-evident (most small commits).
+  - when present, 1-2 short prose paragraphs explaining *why* the change exists or *what* behavior shifts. never enumerate files touched, never enumerate tasks completed, never reference task IDs.
+  - wrapped at ~72 columns manually.
+  - no bullets, no trailers (no `Co-Authored-By`, no `BREAKING CHANGE`, no `Refs:`) unless the user explicitly asks.
+  - tone is direct and technical. example from go-plugin, commit ffa11a1:
+    ```
+    Add a test mode
+
+    This is a special configuration on the plugin server (the plugin side)
+    that enables running the plugin in-process and eases many of the
+    behaviors around that.
+
+    The desire to do this is for more easily using `go test` (and similar)
+    with plugins. This mechanism allows the plugin serving to start up
+    in-process, to grab a ReattachConfig, and to be able to send that
+    ReattachConfig to some other plugin client for connection.
+    ```
+
+  **what the body never contains**
+  - file paths and per-file summaries ("AGENTS.md: ... SPEC.md: ... tasks/plan.md: ...").
+  - task IDs ("Task 08.6", "P0.3").
+  - verification evidence ("mage test exit 0", command output snippets). that belongs in the PR description or a comment, not the commit.
+  - meta-commentary about the commit itself ("this is a follow-up commit", "one-line change").
+  - the word "note:" as a trailer.
+
+  **enforcement**
+  - before `git commit`, re-read the staged diff and ask: would Mitchellh write this subject? is the body necessary? if the body just lists files or tasks, delete it and rely on the subject alone.
+  - if the change is too big to describe in one short subject, the commit is too big. split it.
 
 
 
