@@ -18,14 +18,14 @@
   - Verify: `mage -l` lists the four targets; `mage clean` exits 0.
   - Files: `magefile.go`, `go.mod`, `go.sum`
 
-- [ ] Task 00.3: Scaffold Ent + User schema with locale field
-  - Acceptance: `ent/schema/user.go` defines User with name, email (unique), password_hash (sensitive), locale (default "en"), created_at, updated_at; `mage ent` generates client code; `ent/generate.go` carries the `//go:generate` directive.
-  - Verify: `mage ent` exit 0; `go build ./ent/...` exit 0.
+- [ ] Task 00.3: Scaffold Ent (with `intercept` feature flag) + User schema with locale field
+  - Acceptance: `ent/generate.go` carries `//go:generate go run -mod=mod entgo.io/ent/cmd/ent generate --feature intercept,schema/snapshot ./schema`; `ent/schema/user.go` defines User with name, email (unique), password_hash (sensitive), locale (default "en"), created_at, updated_at; `mage ent` generates client code.
+  - Verify: `mage ent` exit 0; `go build ./ent/...` exit 0; generated `intercept` package present.
   - Files: `ent/generate.go`, `ent/schema/user.go`, `ent/**` (generated), `magefile.go`, `go.mod`, `go.sum`
 
-- [ ] Task 00.4: DB layer + entrypoint
-  - Acceptance: `internal/config.Load()` reads env with sqlite default; `internal/db.Open` opens ent sqlite client and runs auto-migrate; `cmd/inventory/main.go` opens DB, waits for signal, closes cleanly.
-  - Verify: `mage clean build` exit 0; run binary, see "db opened" log, send SIGINT, see "shutting down".
+- [ ] Task 00.4: DB layer + entrypoint + required-env guard for session secret
+  - Acceptance: `internal/config.Load()` reads env (sqlite default DB, default locale `en`); config exposes a `SessionSecret` field; `cmd/inventory/main.go` refuses to start (non-zero exit, clear log line) when `INVENTORY_SESSION_SECRET` is unset; opens DB, waits for signal, closes cleanly.
+  - Verify: `mage clean build` exit 0; run binary without env → non-zero exit + clear message; run with `INVENTORY_SESSION_SECRET=dev-secret` set → "db opened" log, SIGINT → "shutting down".
   - Files: `internal/config/config.go`, `internal/db/db.go`, `cmd/inventory/main.go`, `go.mod`, `go.sum`
 
 - [ ] Task 00.5: i18n bundle + locale registry
@@ -40,7 +40,7 @@
 
 - [ ] Task 00.7: HTTP server + locale middleware + mirrored dashboard
   - Acceptance: `internal/server` wires router with `/{lang}/` prefix; LocaleMiddleware validates lang, sets dir+localizer in context; root `/` redirects to default locale; dashboard template sets `<html dir lang>`; static CSS + htmx served from embedded FS.
-  - Verify: `mage clean build`; run; `curl -sI /` → 302 to `/en/`; `curl -s /en/dashboard` contains `dir="ltr"`; `curl -s /ar/dashboard` contains `dir="rtl"` and Arabic strings.
+  - Verify: `mage clean build`; run with `INVENTORY_SESSION_SECRET=dev-secret`; `curl -sI /` → 302 to `/en/`; `curl -s /en/dashboard` contains `dir="ltr"`; `curl -s /ar/dashboard` contains `dir="rtl"` and Arabic strings.
   - Files: `internal/server/{server,router,locale,htmxmw,render,funcs}.go`, `internal/server/templates/layout.html`, `internal/server/templates/pages/dashboard.html`, `internal/server/static/{css/app.css,vendor/htmx.min.js}`, `cmd/inventory/main.go`
 
 - [ ] Task 00.8: Add `mage test` target + first middleware tests
@@ -49,52 +49,69 @@
   - Files: `magefile.go`, `internal/server/server_test.go` (or split i18n_test.go + server_test.go)
 
 - [ ] Task 00.9: README + phase 00 gate
-  - Acceptance: README documents requirements, setup, mage targets; `mage clean build && mage test` green; manual `/en` vs `/ar` mirror check passes.
+  - Acceptance: README documents requirements (Go 1.22+, node for daisyUI, mage, goi18n), env vars (`INVENTORY_SESSION_SECRET` required, `INVENTORY_DB`, `INVENTORY_ADDR`, `INVENTORY_DEFAULT_LOCALE`), setup, mage targets; `mage clean build && mage test` green; manual `/en` vs `/ar` mirror check passes.
   - Verify: both commands exit 0; commit body records the manual mirror check.
   - Files: `README.md`
 
 ---
 
-## Phase 01 — Auth & RBAC
+## Phase 01 — Auth & RBAC + Tenant Foundation
 
 - [ ] Task 01.1: Role + Permission ent schemas + User.roles edge
-  - Acceptance: `ent/schema/role.go` (name unique, description, edge to permissions + users), `ent/schema/permission.go` (code unique, description, edge to roles); User gains `edge.To("roles", Role.Type)`; `mage ent` regenerates.
+  - Acceptance: `ent/schema/role.go` (name unique, description, edge to permissions + users), `ent/schema/permission.go` (code unique, description, edge to roles); User gains `edge.To("roles", Role.Type)`; `mage ent` regenerates. Neither Role nor Permission carries the TenantMixin (they are global RBAC primitives shared across tenants).
   - Verify: `mage ent` exit 0; `mage clean build` exit 0.
   - Files: `ent/schema/role.go`, `ent/schema/permission.go`, `ent/schema/user.go`, `ent/**` (generated)
 
 - [ ] Task 01.2: Stdlib session store + stdlib PBKDF2 password hashing
-  - Acceptance: `internal/auth.SessionStore` signs/verifies HMAC-SHA256 cookies carrying uid+locale+expiry; `internal/auth.HashPassword`/`VerifyPassword` use a stdlib-only PBKDF2 over SHA-256; roundtrip tests pass.
+  - Acceptance: `internal/auth.SessionStore` signs/verifies HMAC-SHA256 cookies carrying uid + tenantID + locale + expiry; `internal/auth.HashPassword`/`VerifyPassword` use a stdlib-only PBKDF2 over SHA-256; roundtrip tests pass.
   - Verify: `go test -race ./internal/auth/...` exit 0.
   - Files: `internal/auth/session.go`, `internal/auth/password.go`, `internal/auth/auth_test.go`
 
-- [ ] Task 01.3: Auth middleware + login/logout handlers + persisted locale root redirect
-  - Acceptance: `Server.RequireAuth` redirects unauthenticated to `/{lang}/login`; `GET/POST /{lang}/login` validates credentials, writes session, redirects to user's locale dashboard; `POST /{lang}/logout` clears session; root redirect reads session locale when present.
+- [ ] Task 01.3: Tenant schema + TenantMixin + fail-closed interceptor
+  - Acceptance: `ent/schema/tenant.go` defines Tenant (name, slug unique); `internal/tenant/mixin.go` defines `TenantMixin` (ent.Mixin) adding a required `edge.From("tenant", Tenant.Type).Ref("entities").Unique().Required()`; `internal/tenant/interceptor.go` registers a fail-closed `intercept.TraverseFunc` that injects a `tenant_id` predicate into every query when a tenant is present in context and returns no rows when absent; `mage ent` regenerates and the interceptor compiles.
+  - Verify: `mage ent` exit 0; `go build ./...` exit 0; unit test creates two tenants and asserts a query with tenant A's context returns zero rows from a row created under tenant B.
+  - Files: `ent/schema/tenant.go`, `internal/tenant/mixin.go`, `internal/tenant/interceptor.go`, `internal/tenant/tenant_test.go`, `ent/**` (generated), `cmd/inventory/main.go` (register interceptor at startup)
+
+- [ ] Task 01.4: Tenant middleware + session wiring
+  - Acceptance: `internal/server/tenant.go` middleware reads `tenantID` from the session, loads the Tenant row, injects it into request context; `internal/tenant.ContextWith(ctx, t)` / `FromContext(ctx)` helpers; the tenant interceptor is registered on the ent client once at startup and reads from context.
+  - Verify: `go test -race ./internal/server/... ./internal/tenant/...` exit 0; handler test asserts context tenant matches the session's tenant.
+  - Files: `internal/server/tenant.go`, `internal/server/auth.go`, `internal/tenant/context.go`, `internal/server/tenant_test.go`
+
+- [ ] Task 01.5: Auth middleware + login/logout handlers + persisted locale root redirect
+  - Acceptance: `Server.RequireAuth` redirects unauthenticated to `/{lang}/login`; `GET/POST /{lang}/login` validates credentials, writes session (uid + tenantID + locale), redirects to user's locale dashboard; `POST /{lang}/logout` clears session; root redirect reads session locale when present.
   - Verify: manual curl flow — protected route 302→login; POST login 302→dashboard; GET dashboard 200 with cookie; POST logout 302→login.
   - Files: `internal/server/auth.go`, `internal/server/server.go`, `internal/server/router.go`, `internal/server/locale.go`, `internal/server/templates/pages/login.html`, `internal/server/templates/layout.html`, `internal/i18n/locales/active.{en,ar}.toml`
 
-- [ ] Task 01.4: Seed admin user + default RBAC roles/perms
-  - Acceptance: `internal/db` seed helpers create an `admin` user (env-configurable password, default `admin`) and `admin` role with every permission code; `main.go` calls seeds at startup; log line reports seeded credentials.
-  - Verify: run binary; `curl` login as `admin@example.com`/`admin` → 302 to dashboard.
+- [ ] Task 01.6: Seed root tenant + admin user + default RBAC roles/perms
+  - Acceptance: `internal/db` seed helpers create a root `Tenant` (slug `default`), an `admin` user (env-configurable password, default `admin`) belonging to the root tenant, and an `admin` role with every permission code; `main.go` calls seeds at startup; log line reports seeded credentials.
+  - Verify: run binary with `INVENTORY_SESSION_SECRET` set; `curl` login as `admin@example.com`/`admin` → 302 to dashboard.
   - Files: `internal/db/seed.go`, `internal/auth/rbac.go` (permission code constants), `cmd/inventory/main.go`
 
-- [ ] Task 01.5: `RequirePermission` middleware + RBAC tests
+- [ ] Task 01.7: `RequirePermission` middleware + RBAC tests
   - Acceptance: `Server.RequirePermission(code, next)` checks the user's roles for the permission; returns 403 when missing; service test covers both granted and denied cases against in-memory ent sqlite.
   - Verify: `mage test` exit 0.
   - Files: `internal/server/auth.go`, `internal/server/auth_test.go` (or rbac_test.go)
 
-- [ ] Task 01.6: Profile page that persists locale preference in DB
+- [ ] Task 01.8: Cross-tenant isolation service test
+  - Acceptance: a single test file creates two tenants, two users (one per tenant), creates a ProductCategory under each, and asserts: (a) querying with tenant A's context returns only A's category, (b) attempting to mutate B's category from A's context affects zero rows, (c) a query with no tenant in context returns zero rows. This test is re-run by every later phase's gate.
+  - Verify: `go test -race ./internal/tenant/...` exit 0.
+  - Files: `internal/tenant/isolation_test.go`
+
+- [ ] Task 01.9: Profile page that persists locale preference in DB
   - Acceptance: `GET /{lang}/profile` shows current locale; `POST /{lang}/profile` updates `users.locale`, refreshes session locale, redirects to the new-locale profile; layout nav shows login/logout conditionally.
   - Verify: switch locale on profile → root redirect honors new locale after re-login; both TOML files updated with new keys.
   - Files: `internal/server/auth.go`, `internal/server/templates/pages/profile.html`, `internal/server/templates/layout.html`, `internal/i18n/locales/active.{en,ar}.toml`
 
-- [ ] Task 01.7: Phase 01 gate
-  - Acceptance: `mage clean build && mage test` green; login + persisted-locale redirect verified in both `/en` and `/ar`.
-  - Verify: both commands exit 0; commit body records manual verification.
+- [ ] Task 01.10: Phase 01 gate
+  - Acceptance: `mage clean build && mage test` green (including the isolation test); login + persisted-locale redirect verified in both `/en` and `/ar`; cross-tenant isolation holds.
+  - Verify: both commands exit 0; commit body records manual verification + isolation test result.
   - Files: `tasks/todo.md` (checkbox update), any test/seed fixes
 
 ---
 
 ## Phase 02 — Catalog
+
+> Every new schema in this phase (and all later phases) embeds `internal/tenant.TenantMixin`. The mixin + interceptor from Phase 01 handle isolation automatically; phase tasks don't repeat the isolation mechanism, but each phase's gate re-runs the isolation test.
 
 - [ ] Task 02.1: ProductCategory self-referential tree + CRUD
   - Acceptance: `ProductCategory` ent schema (name, optional parent edge to self); handlers for list (tree view), create, edit, delete, re-parent; permission-gated; htmx partials for inline edit.
@@ -267,7 +284,7 @@
 
 ---
 
-## Phase 08 — Operations & QR
+## Phase 08 — Operations & QR + Barcode Scan
 
 - [ ] Task 08.1: Cold chain fields on Product + Location + compliance check service
 - [ ] Task 08.2: CycleCount + CycleCountLine + suggested-count generation
@@ -275,8 +292,12 @@
 - [ ] Task 08.4: StockTransfer bulk (multi-line bin→bin, facility→facility)
 - [ ] Task 08.5: RecallLot + quarantine handler
 - [ ] Task 08.6: QR generator (stdlib SVG) for products, stock, locations, assets, bins
-- [ ] Task 08.7: QR scan landing route `/{lang}/scan/{code}` → resolve + redirect
-- [ ] Task 08.8: Phase 08 gate
+- [ ] Task 08.7: QR scan landing route `/{lang}/scan/{code}` → resolve entity by encoded ID + redirect to detail
+- [ ] Task 08.8: Vendor `jsQR` and add a browser-side scan page
+  - Acceptance: `web/vendor/jsQR.min.js` vendored (~50 KB, Apache-2.0); a `/{lang}/scan` page grants camera access via `getUserMedia`, feature-detects `BarcodeDetector` and uses it when available, else falls back to jsQR; on decode, POSTs the code string to `/{lang}/scan/{code}` (the route from 08.7) and follows the redirect. Works in HTTPS / localhost; graceful error when camera denied.
+  - Verify: `test -s web/vendor/jsQR.min.js`; manual: open `/en/scan` in a browser, scan a printed QR, land on the entity detail page; repeat in `/ar/scan` and confirm mirrored layout.
+  - Files: `web/vendor/jsQR.min.js`, `internal/server/templates/pages/scan.html`, `internal/server/operations.go` (handler for `GET /{lang}/scan`), `internal/server/static/` (embed), `internal/i18n/locales/active.{en,ar}.toml`
+- [ ] Task 08.9: Phase 08 gate
 
 ---
 
@@ -297,16 +318,51 @@
 - [ ] Task 10.2: Switch `INVENTORY_DB` default to a Postgres URL; document env in README
 - [ ] Task 10.3: Generate versioned migrations (`ent migrate --target` or equivalent)
 - [ ] Task 10.4: `mage migrate` target running versioned migrations
-- [ ] Task 10.5: Final clean build + full test suite against Postgres
+- [ ] Task 10.5: Final clean build + full test suite against Postgres (including tenant isolation test)
 - [ ] Task 10.6: Tag release `v0.1.0`; push tag
+
+---
+
+## Phase 11 — Tenant Admin (post-release hardening, pre-`v0.2.0`)
+
+- [ ] Task 11.1: Super-admin role + `is_super_admin` flag on User
+  - Acceptance: a `super_admin` role exists with the `admin` permission plus a `tenants.manage` permission; User gains an `is_super_admin` bool (default false); super-admins bypass the tenant interceptor for tenant-management endpoints only.
+  - Verify: `mage test`; seeded admin is promoted to super-admin by the seed update.
+  - Files: `ent/schema/user.go`, `internal/auth/rbac.go`, `internal/tenant/interceptor.go` (super-admin bypass for tenant mgmt only), `internal/db/seed.go`
+
+- [ ] Task 11.2: Tenant list + create UI (super-admin only)
+  - Acceptance: `GET /{lang}/admin/tenants` lists all tenants; `POST` creates a new tenant (name, slug); both gated by `tenants.manage` permission; not tenant-scoped (intentional bypass, documented).
+  - Verify: `mage test`; manual create a second tenant.
+  - Files: `internal/server/admin.go`, `internal/service/tenant.go`, `internal/server/templates/pages/admin_tenants.html`, locales
+
+- [ ] Task 11.3: Tenant admin user creation (super-admin creates admin for a tenant)
+  - Acceptance: super-admin can create a User belonging to any tenant with the `admin` role for that tenant; the new user's session carries the chosen tenant.
+  - Verify: `mage test`; manual create tenant B's admin, log in as them, confirm only tenant B's data visible.
+  - Files: `internal/server/admin.go`, `internal/service/tenant.go`, templates, locales
+
+- [ ] Task 11.4: Active-tenant switcher for super-admin
+  - Acceptance: super-admin sees a tenant switcher in the nav; switching updates the session's `tenantID` and reloads the dashboard under the selected tenant's scope.
+  - Verify: `mage test`; manual switch between two tenants and confirm data changes.
+  - Files: `internal/server/admin.go`, `internal/server/templates/layout.html`, locales
+
+- [ ] Task 11.5: Per-tenant feature-flag stub
+  - Acceptance: a `TenantFlag` schema (tenant edge, key, value) is read by a `feature.On(tenant, key)` helper; no features gated yet — the mechanism exists for future use.
+  - Verify: `mage test` for the helper.
+  - Files: `ent/schema/tenant_flag.go`, `internal/feature/flag.go`, `internal/feature/flag_test.go`
+
+- [ ] Task 11.6: Phase 11 gate + `v0.2.0` tag
+  - Acceptance: `mage clean build && mage test` green against Postgres; super-admin can manage tenants and switch active tenant; tenant isolation still holds for non-super-admin users.
+  - Verify: both commands exit 0; tag `v0.2.0` pushed.
 
 ---
 
 ## Notes for the executing agent
 
-- Start each task session by re-reading `SPEC.md` (the 6-area contract) + the specific task line in this file. Do not load the whole project history into context.
+- Start each task session by re-reading `SPEC.md` (the 6-area contract + Decisions section) + the specific task line in this file. Do not load the whole project history into context.
 - Search the codebase (grep/glob) before assuming something isn't implemented — ripgrep is non-deterministic and prior tasks may have left partial work.
 - No stubs. A task is done only when its `Verify:` command passes against a real implementation.
+- Every domain ent schema created from Phase 02 onward embeds `internal/tenant.TenantMixin`. Do not add a domain schema without it. Role, Permission, Tenant, and TenantFlag are the only schemas exempt.
 - One commit per task. Commit body includes the verification evidence (command + exit code or output snippet). Reference the task ID in the body (e.g. `Task 00.1`).
 - After each phase's gate task, push to remote.
 - If a task reveals a spec gap, update `SPEC.md` first, then implement.
+- The cross-tenant isolation test (Task 01.8) is re-run by every phase gate. If it ever fails, stop and fix the regression before continuing.

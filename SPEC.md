@@ -2,11 +2,11 @@
 
 ## Objective
 
-Build a thorough, easy-to-use inventory and warehouse management web application for small-to-large operations. The app covers the full domain: product catalog, stock and locations, procurement, outbound (pick/pack/ship), manufacturing (BOM/build), serialized asset tracking, operations (cycle counts, transfers, recalls, cold chain), and reporting.
+Build a thorough, easy-to-use, **multi-tenant** inventory and warehouse management web application for small-to-large operations. One installation hosts multiple organizations; every domain entity is tenant-scoped and isolated at the data layer. The app covers the full domain: product catalog, stock and locations, procurement, outbound (pick/pack/ship), manufacturing (BOM/build), serialized asset tracking, operations (cycle counts, transfers, recalls, cold chain), reporting, and browser-side barcode scanning.
 
 The primary user is a warehouse or inventory operator who needs fast, browser-based access from any device. Ease of use is the priority regardless of operation scale. The app must be usable in any language from day one, with Arabic (RTL) treated as a first-class peer to English (LTR).
 
-Success looks like: a single binary runs locally, opens in a browser, lets a user log in, manage parts and stock across locations, raise and receive purchase orders, pick and ship, build assemblies, track serialized assets, and read reports — all in their chosen language with the layout correctly mirrored.
+Success looks like: a single binary runs locally, opens in a browser, lets a user log in, manage parts and stock across locations within their tenant, raise and receive purchase orders, pick and ship, build assemblies, track serialized assets, scan barcodes in the browser, and read reports — all in their chosen language with the layout correctly mirrored. Users in tenant A can never see or touch tenant B's data.
 
 ## Tech Stack
 
@@ -56,19 +56,22 @@ go_inventory_managent/
 ├── magefile.go               # all build targets
 ├── cmd/inventory/main.go     # entrypoint
 ├── ent/
-│   ├── generate.go           # go:generate
-│   └── schema/               # one .go per entity, added per phase
+│   ├── generate.go           # //go:generate with --feature intercept,schema/snapshot
+│   └── schema/               # one .go per entity; TenantMixin embedded in every domain entity
 ├── internal/
-│   ├── server/               # router, middleware (locale, auth, htmx), handlers, embedded templates + static
-│   ├── service/              # business logic per domain (ent-backed)
+│   ├── server/               # router, middleware (locale, auth, tenant, htmx), handlers, embedded templates + static
+│   ├── service/              # business logic per domain (ent-backed, tenant-aware via context)
 │   ├── auth/                 # session store, password hashing, rbac constants
+│   ├── tenant/               # TenantMixin definition, tenant context helpers, fail-closed interceptor registration
 │   ├── i18n/                 # bundle loader, locale registry, embedded active.*.toml
-│   ├── db/                   # ent client open + seed helpers
-│   ├── config/               # env-driven config
+│   ├── db/                   # ent client open + seed helpers (seeds root tenant + admin)
+│   ├── config/               # env-driven config (INVENTORY_SESSION_SECRET required, INVENTORY_DB, INVENTORY_ADDR, INVENTORY_DEFAULT_LOCALE, INVENTORY_CURRENCY)
 │   └── qrcode/               # stdlib QR SVG generator (P8)
 ├── web/
 │   ├── css/input.css         # tailwind + daisyui plugin source
-│   └── vendor/htmx.min.js    # vendored
+│   └── vendor/
+│       ├── htmx.min.js       # vendored
+│       └── jsQR.min.js       # vendored (P8 barcode-scan fallback)
 └── docs/                     # reference notes only
 ```
 
@@ -103,11 +106,15 @@ go_inventory_managent/
   - Use logical CSS properties in every template (enforces mirroring).
   - One commit per task; reference the task in the commit body.
   - Search the codebase before assuming something isn't implemented.
+  - Embed `TenantMixin` in every domain ent schema (everything except `Tenant`, `User`-tenant-edge, `Permission` codes). Never write a domain entity without it.
+  - Register the fail-closed tenant interceptor on the ent client at startup; every query/mutation passes through it.
+  - Carry `tenantID` in the session cookie and inject the tenant into request context via middleware before any handler runs.
 - **Ask first:**
   - Any DB schema change after a phase has shipped (update spec first).
   - Adding any external dependency not in the tech stack list.
   - Changing the module path or repo URL.
   - Swapping the Ent dialect (P10 owns this).
+  - Writing code that intentionally bypasses the tenant interceptor (admin tooling only; document why in the commit).
 - **Never do:**
   - Raw SQL or direct driver imports — Ent is the only DB layer.
   - Hardcode `dir="ltr"` or `dir="rtl"` in templates — always server-driven.
@@ -117,6 +124,8 @@ go_inventory_managent/
   - Edit vendor directories.
   - Remove failing tests without approval.
   - Implement placeholder/stub implementations — full implementations only.
+  - Start the app without `INVENTORY_SESSION_SECRET` set. Fail fast, log a clear message, exit non-zero.
+  - Add a domain ent schema without the `TenantMixin`.
 
 ## Success Criteria
 
@@ -124,25 +133,31 @@ go_inventory_managent/
 - `/en/dashboard` renders LTR; `/ar/dashboard` renders the exact visual mirror (verified manually each phase, headless-automated when feasible).
 - Root `/` redirects to the authenticated user's persisted locale, or to the default locale (`en`) when unauthenticated.
 - Every protected route redirects to `/{lang}/login` when unauthenticated.
+- The app refuses to start when `INVENTORY_SESSION_SECRET` is unset.
+- Every domain entity is tenant-scoped: a query in tenant A's request context returns zero rows from tenant B. Verified by a service test that opens two tenants and asserts cross-tenant read/mutation attempts return no rows / are rejected.
 - Every domain phase (catalog, stock, procurement, outbound, manufacturing, assets, operations, reports) has end-to-end CRUD or workflow working in the browser with English + Arabic strings.
-- A seeded admin user (`admin@example.com` / `admin`) can log in and exercise every feature.
+- Barcode scanning works in the browser: opening the scan page grants camera access, decodes a QR via `BarcodeDetector` when available or vendored `jsQR` as fallback, and POSTs the code to `/{lang}/scan/{code}` which redirects to the matching entity's detail page.
+- A seeded admin user (`admin@example.com` / `admin`) belonging to the root tenant can log in and exercise every feature.
 - All user-facing strings exist in both `active.en.toml` and `active.ar.toml`.
 - Final phase: app runs against Postgres with versioned migrations; `mage migrate` succeeds; all tests green.
 - Released as `v0.1.0` git tag.
 
+## Decisions (from review)
+
+1. **Session secret:** explicit env var `INVENTORY_SESSION_SECRET` is required. App refuses to start when unset. No runtime-generated fallback.
+2. **File uploads (attachments):** local filesystem under `uploads/` (gitignored), path stored on the ent Attachment row. Chosen for v0.1.0; object-store abstraction deferred.
+3. **Multi-tenant:** required for v0.1.0. One installation hosts multiple organizations; every domain entity is tenant-scoped.
+   - Mechanism: a `Tenant` ent schema + a `TenantMixin` (ent.Mixin) that adds a `tenant` edge to every domain entity. Ent's `intercept` feature flag is enabled in `ent/generate.go`; a fail-closed `intercept.TraverseFunc` injects a `tenant_id` predicate into every read/write so no query can cross tenant boundaries unless the context explicitly opts out (admin tooling only).
+   - `User` has a `tenant` edge; the session cookie carries `tenantID`; an HTTP middleware injects the tenant into request context; the interceptor reads it.
+   - Default tenant: a single root org is seeded at first run; the seeded admin belongs to it. Creating additional tenants + admin users is an admin UI task (Phase 11 — Tenant Admin, see tasks/plan.md).
+   - No cross-tenant queries in normal request flows. Reports and exports inherit the tenant filter automatically.
+4. **Currency:** single currency per installation for v0.1.0, driven by an env/config value. Multi-currency + FX rates (Frankfurter v2) + `go-money` are out of scope for v0.1.0 and will land in a later minor release.
+5. **Reports rendering:** server-rendered HTML tables only. No chart library. Charts deferred.
+6. **Barcode scanning UI:** in scope for v0.1.0 (Phase 08). Browser-side, no Go server changes beyond the already-planned `/{lang}/scan/{code}` landing route.
+   - Mechanism: feature-detect the native `BarcodeDetector` API (zero deps, but limited/experimental browser support, HTTPS-only). When unavailable, fall back to a vendored copy of `jsQR` (~50 KB pure JS, works in every modern browser).
+   - Camera access via `getUserMedia`; decoded string POSTed to the existing scan landing route, which resolves the entity (product / stock item / location / asset / bin) by encoded ID and redirects to its detail page.
+   - Both paths feed a captured `ImageData` to the decoder; the result is a code string that the existing `/scan/{code}` handler already accepts. No new server-side decoder code.
+
 ## Open Questions
 
-1. **Session secret source:** default to a random 32-byte value generated at startup (logged once) when `INVENTORY_SESSION_SECRET` env is unset. Acceptable, or require explicit env on first run?
-  -> require explicit env.
-2. **File uploads (attachments):** store on local filesystem under `uploads/` (gitignored) keyed by ent attachment row. Acceptable for v0.1.0, or defer attachments entirely until an object store is chosen?
-  -> store on local filesystem.
-3. **Barcode scanning UI:** P8 ships QR *generation*. Scanning (camera input) is browser-side via the device's native `getUserMedia` + a stdlib-free JS decoder, or out of scope for v0.1.0? (Recommend: out of scope; users scan with any app and hit the `/scan/{code}` landing route.)
-  -> the feature is required but your suggested implementation needs better research before settling the execution -> will affect the plan.
-  
-4. **Multi-tenant:** single-tenant for v0.1.0 (one installation = one warehouse org). Multi-tenant (org column + row-level filtering) deferred. Confirm.
-  -> multi-tenant.
-5. **Currency:** single-currency per installation for v0.1.0 (config-driven), multi-currency + exchange rates deferred. Confirm. 
-  -> we will later add frankfurter v2 fx rates and go money package but this is out of scope at the current stage.
-
-6. **Reports rendering:** server-rendered HTML tables only (no chart library). Charts deferred. Confirm.
-  -> yes, deferred
+None remaining. All six original questions are resolved above.
