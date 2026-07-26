@@ -14,6 +14,7 @@
 - htmx: https://github.com/donseba/go-htmx
 - daisyui: https://daisyui.com/htmx-component-library/?lang=en
 - we are using Ent as an orm: https://github.com/ent/ent , https://entgo.io/docs/tutorial-setup/.
+- barcode + QR generation and scanning: https://github.com/makiuchi-d/gozxing (pure-Go ZXing port; handles both directions, QR + 1D formats; approved exception to the "stdlib only" rule per the user's explicit request for a single clean Go package instead of stdlib SVG + vendored JS).
 
 
 # Localization
